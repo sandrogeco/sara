@@ -3,7 +3,7 @@ import sys
 import time
 import os.path
 import threading
-
+from scipy.optimize import curve_fit
 import boto3
 from scipy.signal import hilbert
 from obspy.signal.cross_correlation import correlate
@@ -12,6 +12,9 @@ from scipy import signal
 from obspy import UTCDateTime
 from obspy.clients.filesystem.sds import Client
 from obspy import read_inventory,Trace,Stream
+from obspy.geodetics import  gps2dist_azimuth
+from obspy.core.inventory import Channel, Site
+
 import numpy as np
 
 
@@ -59,6 +62,28 @@ def checkFile(nslc, ts, te,remove=True):
 
 
 
+def dist_xyz(seed_id,lat,lon,z):
+    s1_coord=inventory.get_coordinates(seed_id)
+    d=gps2dist_azimuth(s1_coord['latitude'],s1_coord['longitude'],lat,lon)
+    dz=-(s1_coord['elevation']+s1_coord['local_depth'])-z
+    return np.sqrt(d[0]**2+dz**2)
+
+def afr(sensor_n,lat,lon,depth,rList):
+    r=[]
+    for i in sensor_n:
+        jj=int(i)
+        sr=rList[jj]
+        s=sr.split('_')[0]
+        s1=sr.split('_')[1]
+        try:
+            d=dist_xyz(s,lat,lon,depth)
+            d1 = dist_xyz(s1, lat, lon, depth)
+            r.append(d1/d)
+        except:
+            print('err afr')
+    # print(r)
+    return r
+
 def xcorr(x, y, scale='coeff'):
     corr=np.correlate(x,y,mode='full')
     lags = np.arange(-(x.size - 1), x.size)
@@ -103,8 +128,9 @@ def getRawData3D(nslc,tx,fmin,fmax,wnd=30):
     r.stats['channel'] = '3DE'
     return r
 
-def hilb(s):
+def hilb(id,tx,fmin,fmax,wnd):
     #s.filter('bandpass', freqmin=2, freqmax=25)
+    s= getRawData3D(id, tx, fmin, fmax, wnd)
     s.resample(200,window='hann')
     data=s.data
     t=s.times()
@@ -121,7 +147,8 @@ def hilb(s):
     r.stats['channel'] = 'HLB'
     return r
 
-def gauss(s,sigma=30):
+def gauss(id,tx,sigma,fmin,fmax,wnd):
+    s= hilb(id,tx,fmin,fmax,wnd)
     r=Trace(gaussian_filter1d(s.data, sigma))
     r.stats['starttime'] = s.stats['starttime']
     r.stats['sampling_rate'] = s.stats['sampling_rate']
@@ -129,46 +156,83 @@ def gauss(s,sigma=30):
     r.stats['station'] = s.stats['station']
     r.stats['location'] = s.stats['location']
     r.stats['channel'] = 'GSS'
+
+    add_ch(id[0], 'GSS')
+
     return r
 
+def add_ch(nslc,new_channel_code):
+
+    # Parse the NSLC string into its components
+    parts = nslc.split('.')
+    network_code = parts[0]  # e.g., "BR"
+    station_code = parts[1]  # e.g., "ESM02"
+    location_code = parts[2]  # may be an empty string, e.g., ""
+    channel_code = parts[3]  # e.g., "HHZ"
+
+    found_station = None
+    found_network = None
+    found_channel = None
+    for network in inventory.networks:
+        if network.code == network_code:
+            for station in network.stations:
+                if station.code == station_code:
+                    for channel in station:
+                        if channel.code == channel_code:
+                            found_channel = channel
+                            found_station = station
+                            found_network = network
+                            break
+
+    newch=found_channel
+    newch.code=new_channel_code
+
+    found_station.channels.append(newch)
 
 
 def trARatio(r,corr_thr,ampl_thr):
     a = [rx.id for rx in r]
-    c = np.empty((len(a), len(a)), dtype=object)
+    c = []#np.empty((len(a), len(a)), dtype=object)
     for i in range(0,len(a)):
         for j in range(i+1,len(a)):
     #        for item in zip(r[i].slide(cWnd,cSft),r[j].slide(cWnd,cSft)):
-            [cc, l] = xcorr(signal.detrend(r[i].data), signal.detrend(r[j].data))
-            corr=np.max(cc)
-            maxsl0=np.max(r[i].data)
-            maxsl1=np.max(r[j].data)
-            if(
-                    (maxsl1>=ampl_thr)&
-                    (maxsl0 >= ampl_thr)&
-                    (corr>corr_thr)
-                ):
-                c[i,j] = {'id':a[i]+ '_' + a[j],
-                   'corr':corr,
-                   'ratio':maxsl0/maxsl1,
-                   'times':r[0].stats['starttime'],
-                   'max0':maxsl0,
-                   'max1':maxsl1}
-    # print('x')
+            maxsl0 = np.max(r[i].data)
+            maxsl1 = np.max(r[j].data)
+            if ((maxsl1 >= ampl_thr) &
+                (maxsl0 >= ampl_thr)):
+                    [cc, l] = xcorr(signal.detrend(r[i].data), signal.detrend(r[j].data))
+                    corr=np.max(cc)
+                    if(corr>corr_thr):
+                        c.append(
+                            {'id':a[i]+ '_' + a[j],
+                           'corr':corr,
+                           'ratio':maxsl0/maxsl1,
+                           'times':r[0].stats['starttime'],
+                           'max0':maxsl0,
+                           'max1':maxsl1})
     return c
 
 trr=[]
 #p=elab_trace('BR.ESM02..HHE',UTCDateTime('2024-03-02T00:00'),
 #             UTCDateTime('2024-03-02T01:00'),1,10)
-stzs=[['BR.ESM02..HHE','BR.ESM02..HHN','BR.ESM02..HHZ'],['BR.ESM03..HHE','BR.ESM03..HHN','BR.ESM03..HHZ']]
+stzs=[['BR.ESM02..HHE','BR.ESM02..HHN','BR.ESM02..HHZ'],
+      ['BR.ESM03..HHE','BR.ESM03..HHN','BR.ESM03..HHZ'],
+      ['BR.ESM05..HHE','BR.ESM05..HHN','BR.ESM05..HHZ'],
+      ['BR.ESM07..HHE','BR.ESM07..HHN','BR.ESM07..HHZ']]
 stz_ph_s=Stream()
-for stz in stzs:
-    p=getRawData3D(stz,UTCDateTime('2024-03-02T00:00'),fmin=1,fmax=10,wnd=30)
-    ph=hilb(p)
-    phg=gauss(ph,sigma=30)
-    stz_ph_s.append(phg)
-    x=trARatio(stz_ph_s,corr_thr=0.5,ampl_thr=1e-5)
 
+
+for stz in stzs:
+    phg=gauss(stz,UTCDateTime('2024-03-02T00:00'),sigma=30,fmin=1,fmax=10,wnd=30)
+    stz_ph_s.append(phg)
+
+x=trARatio(stz_ph_s,corr_thr=0.1,ampl_thr=1e-8)
+ids=[cx['id'] for cx in x]
+ratios=[cx['ratio'] for cx in x]
+def afrl(sensor_n,lat,lon,depth):
+    return afr(sensor_n,lat,lon,depth,ids)
+a = curve_fit(afrl,np.arange(0,len(ids),dtype=float) , ratios, bounds=([-9.65, -35.76, -1500], [-9.62, -35.73, 0]), method='trf',
+              tr_solver='lsmr', full_output=True, maxfev=150, ftol=5e-6, loss='soft_l1')
 
 print(p)
 
