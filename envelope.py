@@ -16,7 +16,8 @@ from obspy.geodetics import  gps2dist_azimuth
 from obspy.core.inventory import Channel
 import geopandas
 from sqlalchemy import create_engine
-
+from shapely import Point
+import json
 
 import numpy as np
 
@@ -201,6 +202,7 @@ def add_ch(nslc,new_channel_code):
 def trARatio(r,corr_thr,ampl_thr):
     a = [rx.id for rx in r]
     c = []#np.empty((len(a), len(a)), dtype=object)
+    s={}
     for i in range(0,len(a)):
         for j in range(i+1,len(a)):
     #        for item in zip(r[i].slide(cWnd,cSft),r[j].slide(cWnd,cSft)):
@@ -218,7 +220,10 @@ def trARatio(r,corr_thr,ampl_thr):
                            'times':r[0].stats['starttime'],
                            'max0':maxsl0,
                            'max1':maxsl1})
-    return c
+                        s[a[i]]=maxsl0;
+                        s[a[j]]=maxsl1;
+
+    return c,s
 
 trr=[]
 #p=elab_trace('BR.ESM02..HHE',UTCDateTime('2024-03-02T00:00'),
@@ -230,42 +235,55 @@ stzs=[['BR.ESM02..HHE','BR.ESM02..HHN','BR.ESM02..HHZ'],
 stz_ph_s=Stream()
 
 
+config={'name':"test1",
+        'wnd':30,
+        'fmin':1,
+        'fmax':10,
+        'sigma':30,
+        'corr_thr':0.9,
+        'ampl_thr':1e-8,
+        'maxfev':150,
+        'ftol':5e-6,
+        'tr_solver':'lsmr',
+        'loss':'soft_l1'
+        }
+
+note=json.dumps(config)
+
 for stz in stzs:
     phg=gauss(stz,UTCDateTime('2024-03-02T00:00'),sigma=30,fmin=1,fmax=10,wnd=30)
     stz_ph_s.append(phg)
 
-x=trARatio(stz_ph_s,corr_thr=0.1,ampl_thr=1e-8)
+x,s=trARatio(stz_ph_s,corr_thr=0.1,ampl_thr=1e-8)
 ids=[cx['id'] for cx in x]
 ratios=[cx['ratio'] for cx in x]
 def afrl(sensor_n,lat,lon,depth):
     return afr(sensor_n,lat,lon,depth,ids)
 a = curve_fit(afrl,np.arange(0,len(ids),dtype=float) , ratios, bounds=([-9.65, -35.76, -1500], [-9.62, -35.73, 0]), method='trf',
               tr_solver='lsmr', full_output=True, maxfev=150, ftol=5e-6, loss='soft_l1')
-ds = [saralib.dist_xyz(kii, a[0][0], a[0][1], a[0][2]) for kii in list(ampl.keys())]
-aas = [ampl[kii] for kii in list(ampl.keys())]
-source_ampl = np.mean(np.asarray(aas) * np.asarray(ds))
+ds = [dist_xyz(kii, a[0][0], a[0][1], a[0][2]) for kii in list(s.keys())]
+ampls = [s[kii] for kii in list(s.keys())]
+source_ampl = np.mean(np.asarray(ampls) * np.asarray(ds))
 perr = np.sqrt(np.diag(a[1]))
 
-#MSE = np.mean((np.asarray(ratios) - np.asarray(afr(vRatios, a[0][0], a[0][1], a[0][2]))) ** 2)
-# station amplitude
-ampl = {}
-for kr in kRatios:
-    kk = kr.split('_')
-    ampl[kk[0]] = rt[kr]['a1'][x]
-    ampl[kk[1]] = rt[kr]['a2'][x]
-ds = [saralib.dist_xyz(kii, a[0][0], a[0][1], a[0][2]) for kii in list(ampl.keys())]
-aas = [ampl[kii] for kii in list(ampl.keys())]
-source_ampl = np.mean(np.asarray(aas) * np.asarray(ds))
-a = a[0]
-pdb = {'utc_time': UTCDateTime(rt[rList[0]]['times'][x]), 'geometry': Point(a[1], a[0]), 'depth': a[2], 'lat': a[0],
-       'lon': a[1], 'note': note
-    , 'err_lat': perr[0], 'err_lon': perr[1], 'err_depth': perr[2],
-       'n_st': len(ss), 'sts': ','.join(kRatios), 'misfit': MSE, 'source_ampl': source_ampl, 'b': 0}
-# 'err_volume': 0, 'misfit': MSE, 'ampl': json.dumps(ampl),
-# 'source_ampl': sa}  # ,'single_misfit':json.dumps(re)}
+pdb = {'utc_time': x[0]['times'],
+       'geometry': Point(a[1], a[0]),
+       'depth': a[2],
+       'lat': a[0],
+       'lon': a[1],
+       'note': note,
+       'err_lat': perr[0],
+       'err_lon': perr[1],
+       'err_depth': perr[2],
+       'n_st': len(ampls),
+       'sts': '['+','.join(s.keys())+']',
+       'ampl':'['+','.join([str(s[k]) for k in s.keys()])+']',
+       'misfit': 0,
+       'source_ampl': source_ampl,
+       'b': 0}
 print(pdb)
 gdf = geopandas.GeoDataFrame([pdb], crs="EPSG:4326")
-gdf.to_postgis('detections', saralib.connectDB(), 'sara4_test', 'append')
+gdf.to_postgis('detections',connectDB(), 'sara4_test', 'append')
 
 print(p)
 
