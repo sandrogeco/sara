@@ -90,7 +90,7 @@ def afr(sensor_n,lat,lon,depth,rList):
             r.append(d1/d)
         except:
             print('err afr')
-    # print(r)
+    #print(r)
     return r
 
 def xcorr(x, y, scale='coeff'):
@@ -247,43 +247,48 @@ config={'name':"test1",
         'tr_solver':'lsmr',
         'loss':'soft_l1'
         }
-
-note=json.dumps(config)
+note=config['name']
+config_json=json.dumps(config)
 
 for stz in stzs:
-    phg=gauss(stz,UTCDateTime('2024-03-02T00:00'),sigma=30,fmin=1,fmax=10,wnd=30)
+    phg=gauss(stz,UTCDateTime('2024-03-02T00:00'),sigma=30,fmin=1,fmax=10,wnd=3600)
     stz_ph_s.append(phg)
+for stz_ph_sx in stz_ph_s.slide(window_length=15,step=1):
+    x,s=trARatio(stz_ph_sx,corr_thr=0.1,ampl_thr=1e-8)
+    ids=[cx['id'] for cx in x]
+    ratios=[cx['ratio'] for cx in x]
+    print(ratios)
+    def afrl(sensor_n,lat,lon,depth):
+        return afr(sensor_n,lat,lon,depth,ids)
+    try:
+        a = curve_fit(afrl,np.arange(0,len(ids),dtype=float) , ratios, bounds=([-9.65, -35.76, -1500], [-9.62, -35.73, 0]), method='trf',
+                      tr_solver='lsmr', full_output=True, maxfev=150, ftol=5e-6, loss='soft_l1')
+        ds = [dist_xyz(kii, a[0][0], a[0][1], a[0][2]) for kii in list(s.keys())]
+        ampls = [s[kii] for kii in list(s.keys())]
+        source_ampl = np.mean(np.asarray(ampls) * np.asarray(ds))
+        perr = np.sqrt(np.diag(a[1]))
 
-x,s=trARatio(stz_ph_s,corr_thr=0.1,ampl_thr=1e-8)
-ids=[cx['id'] for cx in x]
-ratios=[cx['ratio'] for cx in x]
-def afrl(sensor_n,lat,lon,depth):
-    return afr(sensor_n,lat,lon,depth,ids)
-a = curve_fit(afrl,np.arange(0,len(ids),dtype=float) , ratios, bounds=([-9.65, -35.76, -1500], [-9.62, -35.73, 0]), method='trf',
-              tr_solver='lsmr', full_output=True, maxfev=150, ftol=5e-6, loss='soft_l1')
-ds = [dist_xyz(kii, a[0][0], a[0][1], a[0][2]) for kii in list(s.keys())]
-ampls = [s[kii] for kii in list(s.keys())]
-source_ampl = np.mean(np.asarray(ampls) * np.asarray(ds))
-perr = np.sqrt(np.diag(a[1]))
-
-pdb = {'utc_time': x[0]['times'],
-       'geometry': Point(a[1], a[0]),
-       'depth': a[2],
-       'lat': a[0],
-       'lon': a[1],
-       'note': note,
-       'err_lat': perr[0],
-       'err_lon': perr[1],
-       'err_depth': perr[2],
-       'n_st': len(ampls),
-       'sts': '['+','.join(s.keys())+']',
-       'ampl':'['+','.join([str(s[k]) for k in s.keys()])+']',
-       'misfit': 0,
-       'source_ampl': source_ampl,
-       'b': 0}
-print(pdb)
-gdf = geopandas.GeoDataFrame([pdb], crs="EPSG:4326")
-gdf.to_postgis('detections',connectDB(), 'sara4_test', 'append')
+        pdb = {'utc_time': x[0]['times'],
+               'geometry': Point(a[0][1], a[0][0]),
+               'depth': a[0][2],
+               'lat': a[0][0],
+               'lon': a[0][1],
+               'note': note,
+               'config':config_json,
+               'err_lat': perr[0],
+               'err_lon': perr[1],
+               'err_depth': perr[2],
+               'n_st': len(ampls),
+               'sts': '['+','.join(s.keys())+']',
+               'ampl':'['+','.join([str(s[k]) for k in s.keys()])+']',
+               'misfit': 0,
+               'source_ampl': source_ampl,
+               'b': 0}
+        print(pdb)
+        gdf = geopandas.GeoDataFrame([pdb], crs="EPSG:4326")
+        gdf.to_postgis('detections',connectDB(), 'sara4_test', 'append')
+    except Exception as e:
+        print(e)
 
 print(p)
 
