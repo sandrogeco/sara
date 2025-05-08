@@ -52,7 +52,13 @@ def remove_old_1d(nslc,tts):
 
 def checkFile(nslc, ts, te,remove=True):
     remove_old_1d(nslc,ts)
-    paths = set((toPath(nslc, ts), toPath(nslc, te)))
+    t=ts
+    paths=[]
+    while t<te+3600*24:
+        paths.append(toPath(nslc,t))
+        t+=3600*24
+    #paths = set((toPath(nslc, ts), toPath(nslc, te)))
+    paths=set(paths)
     res = []
     for p in paths:
         fullpath = '%s%s' % (base_path, p)
@@ -114,9 +120,9 @@ def elab_trace(trname,tts,tte,fmin,fmax,lcoffs=0.5):
     trace = cl.get_waveforms(
         nslc[0], nslc[1], nslc[2], nslc[3], ts, te).merge(1, 'interpolate')
     trace.remove_response(inventory)
+    trace.resample(50, window='hann')
     trace.filter('bandpass', freqmin=fmin, freqmax=fmax, corners=2, zerophase=True)
     trace.trim(tts, tte, pad=True, fill_value=0)
-
     return trace[0]
 
 def getRawData3D(nslc,tx,fmin,fmax,wnd=30):
@@ -139,8 +145,8 @@ def getRawData3D(nslc,tx,fmin,fmax,wnd=30):
 
 def hilb(id,tx,fmin,fmax,wnd):
     #s.filter('bandpass', freqmin=2, freqmax=25)
+
     s= getRawData3D(id, tx, fmin, fmax, wnd)
-    s.resample(200,window='hann')
     data=s.data
     t=s.times()
     fs=s.stats['sampling_rate']
@@ -232,63 +238,81 @@ stzs=[['BR.ESM02..HHE','BR.ESM02..HHN','BR.ESM02..HHZ'],
       ['BR.ESM03..HHE','BR.ESM03..HHN','BR.ESM03..HHZ'],
       ['BR.ESM05..HHE','BR.ESM05..HHN','BR.ESM05..HHZ'],
       ['BR.ESM07..HHE','BR.ESM07..HHN','BR.ESM07..HHZ']]
+
+
+stzs=[["BR.ESM01..HH1", "BR.ESM01..HH2", "BR.ESM01..HHZ"],
+      ["BR.ESM08..HH1", "BR.ESM08..HH2", "BR.ESM08..HHZ"],
+      ["BR.ESM10..HH1", "BR.ESM10..HH2", "BR.ESM10..HHZ"],
+      ["SC.MAC04.01.HNE", "SC.MAC04.01.HNN", "SC.MAC04.01.HNZ"],
+      ["SC.MAC11.01.HNE", "SC.MAC11.01.HNN", "SC.MAC11.01.HNZ"],
+      ["SC.MAC12.01.HNE", "SC.MAC12.01.HNN", "SC.MAC12.01.HNZ"],
+      ["SC.MAC13.01.HNE", "SC.MAC13.01.HNN", "SC.MAC13.01.HNZ"],
+      ["SC.MAC15.01.HNE", "SC.MAC15.01.HNN", "SC.MAC15.01.HNZ"]]
 stz_ph_s=Stream()
 
 
-config={'name':"test1",
-        'wnd':30,
+config={'name':"test1d",
+        'wnd':15,
+        'shift':5,
         'fmin':1,
         'fmax':10,
         'sigma':30,
         'corr_thr':0.9,
-        'ampl_thr':1e-8,
+        'ampl_thr':1e-6,
         'maxfev':150,
         'ftol':5e-6,
         'tr_solver':'lsmr',
-        'loss':'soft_l1'
+        'loss':'soft_l1',
+        'method':'trf'
         }
 note=config['name']
 config_json=json.dumps(config)
+with open("config.json", "w") as f:
+    json.dump(config, f, indent=4)
+
 
 for stz in stzs:
-    phg=gauss(stz,UTCDateTime('2024-03-02T00:00'),sigma=30,fmin=1,fmax=10,wnd=3600)
+    phg=gauss(stz,UTCDateTime('2023-12-10T00:00'),sigma=config['sigma'],fmin=config['fmin'],fmax=config['fmax'],wnd=3600*24)
     stz_ph_s.append(phg)
-for stz_ph_sx in stz_ph_s.slide(window_length=15,step=1):
-    x,s=trARatio(stz_ph_sx,corr_thr=0.1,ampl_thr=1e-8)
+for stz_ph_sx in stz_ph_s.slide(window_length=config['wnd'],step=config['shift']):
+    x,s=trARatio(stz_ph_sx,corr_thr=config['corr_thr'],ampl_thr=config['ampl_thr'])
     ids=[cx['id'] for cx in x]
     ratios=[cx['ratio'] for cx in x]
-    print(ratios)
-    def afrl(sensor_n,lat,lon,depth):
-        return afr(sensor_n,lat,lon,depth,ids)
-    try:
-        a = curve_fit(afrl,np.arange(0,len(ids),dtype=float) , ratios, bounds=([-9.65, -35.76, -1500], [-9.62, -35.73, 0]), method='trf',
-                      tr_solver='lsmr', full_output=True, maxfev=150, ftol=5e-6, loss='soft_l1')
-        ds = [dist_xyz(kii, a[0][0], a[0][1], a[0][2]) for kii in list(s.keys())]
-        ampls = [s[kii] for kii in list(s.keys())]
-        source_ampl = np.mean(np.asarray(ampls) * np.asarray(ds))
-        perr = np.sqrt(np.diag(a[1]))
+    if len(ratios)>4:
+        print(ratios)
+        def afrl(sensor_n,lat,lon,depth):
+            return afr(sensor_n,lat,lon,depth,ids)
+        try:
+            a = curve_fit(afrl,np.arange(0,len(ids),dtype=float) , ratios, bounds=([-9.65, -35.76, -1500], [-9.62, -35.73, 0]),
+                          method=config['method'],tr_solver=config['tr_solver'], full_output=True,
+                          maxfev=config['maxfev'], ftol=config['ftol'], loss=config['loss'])
+            ds = [dist_xyz(kii, a[0][0], a[0][1], a[0][2]) for kii in list(s.keys())]
+            ampls = [s[kii] for kii in list(s.keys())]
+            source_ampl = np.mean(np.asarray(ampls) * np.asarray(ds))
+            perr = np.sqrt(np.diag(a[1]))
 
-        pdb = {'utc_time': x[0]['times'],
-               'geometry': Point(a[0][1], a[0][0]),
-               'depth': a[0][2],
-               'lat': a[0][0],
-               'lon': a[0][1],
-               'note': note,
-               'config':config_json,
-               'err_lat': perr[0],
-               'err_lon': perr[1],
-               'err_depth': perr[2],
-               'n_st': len(ampls),
-               'sts': '['+','.join(s.keys())+']',
-               'ampl':'['+','.join([str(s[k]) for k in s.keys()])+']',
-               'misfit': 0,
-               'source_ampl': source_ampl,
-               'b': 0}
-        print(pdb)
-        gdf = geopandas.GeoDataFrame([pdb], crs="EPSG:4326")
-        gdf.to_postgis('detections',connectDB(), 'sara4_test', 'append')
-    except Exception as e:
-        print(e)
+            pdb = {'utc_time': x[0]['times'],
+                   'geometry': Point(a[0][1], a[0][0]),
+                   'depth': a[0][2],
+                   'lat': a[0][0],
+                   'lon': a[0][1],
+                   'note': note,
+                   'config':config_json,
+                   'err_lat': perr[0],
+                   'err_lon': perr[1],
+                   'err_depth': perr[2],
+                   'n_st': len(ampls),
+                   'sts': '['+','.join(s.keys())+']',
+                   'ampl':'['+','.join([str(s[k]) for k in s.keys()])+']',
+                   'misfit': 0,
+                   'source_ampl': source_ampl,
+                   'b': 0}
+            print(pdb)
+            gdf = geopandas.GeoDataFrame([pdb], crs="EPSG:4326")
+            #gdf["geometry"] = gdf["geometry"].apply(lambda geom: geom.wkt)
+            gdf.to_postgis('detections',connectDB(), 'sara4_test', 'append')
+        except Exception as e:
+            print(e)
 
 print(p)
 
