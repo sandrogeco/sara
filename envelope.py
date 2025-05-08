@@ -3,6 +3,8 @@ import sys
 import time
 import os.path
 import threading
+
+import obspy
 from scipy.optimize import curve_fit
 import boto3
 from scipy.signal import hilbert
@@ -31,7 +33,8 @@ base_path = os.environ.get('SEED_PATH', '/mnt/seed/')
 bucket = os.environ.get('S3_BUCKET','geoapp-seed-data')
 
 cl = Client(base_path)
-
+tb='detections'
+schema='sara4_test'
 
 def connectDB():
     db_connection_url = "postgresql://postgres:wave*worm@88.99.137.51:5432/maceio_tests"
@@ -163,17 +166,33 @@ def hilb(id,tx,fmin,fmax,wnd):
     return r
 
 def gauss(id,tx,sigma,fmin,fmax,wnd):
-    s= hilb(id,tx,fmin,fmax,wnd)
-    r=Trace(gaussian_filter1d(s.data, sigma))
-    r.stats['starttime'] = s.stats['starttime']
-    r.stats['sampling_rate'] = s.stats['sampling_rate']
-    r.stats['network'] = s.stats['network']
-    r.stats['station'] = s.stats['station']
-    r.stats['location'] = s.stats['location']
-    r.stats['channel'] = 'GSS'
+    newid = id[0].rsplit('.', 1)[0] + '.GSS'
+    try:
+
+        f=get_filename(newid)
+        r=obspy.read(f+".mseed")[0]
+        if (r.stats['starttime']<=tx)and(r.stats['endtime']>=(tx+wnd)):
+            r.trim(tx,tx+wnd)
+            print(newid + "  found")
+        else:
+            raise ValueError("No GSS file")
+    except:
+        try:
+            print(newid+" GSS no found")
+            s= hilb(id,tx,fmin,fmax,wnd)
+            r=Trace(gaussian_filter1d(s.data, sigma))
+            r.stats['starttime'] = s.stats['starttime']
+            r.stats['sampling_rate'] = s.stats['sampling_rate']
+            r.stats['network'] = s.stats['network']
+            r.stats['station'] = s.stats['station']
+            r.stats['location'] = s.stats['location']
+            r.stats['channel'] = 'GSS'
+            filename=get_filename(r.id)
+            r.write(filename+'.mseed')
+        except:
+            r=[]
 
     add_ch(id[0], 'GSS')
-
     return r
 
 def add_ch(nslc,new_channel_code):
@@ -209,38 +228,43 @@ def trARatio(r,corr_thr,ampl_thr):
     a = [rx.id for rx in r]
     c = []#np.empty((len(a), len(a)), dtype=object)
     s={}
+    v=np.zeros([len(a),len(a)])
+
     for i in range(0,len(a)):
         for j in range(i+1,len(a)):
-    #        for item in zip(r[i].slide(cWnd,cSft),r[j].slide(cWnd,cSft)):
-            maxsl0 = np.max(r[i].data)
-            maxsl1 = np.max(r[j].data)
-            if ((maxsl1 >= ampl_thr) &
-                (maxsl0 >= ampl_thr)):
-                    [cc, l] = xcorr(signal.detrend(r[i].data), signal.detrend(r[j].data))
-                    corr=np.max(cc)
-                    if(corr>corr_thr):
-                        c.append(
-                            {'id':a[i]+ '_' + a[j],
-                           'corr':corr,
-                           'ratio':maxsl0/maxsl1,
-                           'times':r[0].stats['starttime'],
-                           'max0':maxsl0,
-                           'max1':maxsl1})
-                        s[a[i]]=maxsl0;
-                        s[a[j]]=maxsl1;
+            found = False
+            for k in range(0,len(a)):
+                if (v[k,i]>0)and(v[k,j]>0):
+                    found=True
+                    break
+            if  not found:
+                maxsl0 = np.max(r[i].data)
+                maxsl1 = np.max(r[j].data)
+                if ((maxsl1 >= ampl_thr) &
+                    (maxsl0 >= ampl_thr)):
+                        [cc, l] = xcorr(signal.detrend(r[i].data), signal.detrend(r[j].data))
+                        corr=np.max(cc)
+                        if(corr>corr_thr):
+                            c.append(
+                                {'id':a[i]+ '_' + a[j],
+                               'corr':corr,
+                               'ratio':maxsl0/maxsl1,
+                               'times':r[0].stats['starttime'],
+                               'max0':maxsl0,
+                               'max1':maxsl1})
+                            v[i,j]=1
+                            s[a[i]]=maxsl0;
+                            s[a[j]]=maxsl1;
 
     return c,s
 
+def get_filename(id):
+    filename = id +"_"+ str(config['sigma']) +"_"+str(config['fmin']) +"_"+ str(config['fmax'])
+    return filename
+
 trr=[]
-#p=elab_trace('BR.ESM02..HHE',UTCDateTime('2024-03-02T00:00'),
-#             UTCDateTime('2024-03-02T01:00'),1,10)
-stzs=[['BR.ESM02..HHE','BR.ESM02..HHN','BR.ESM02..HHZ'],
-      ['BR.ESM03..HHE','BR.ESM03..HHN','BR.ESM03..HHZ'],
-      ['BR.ESM05..HHE','BR.ESM05..HHN','BR.ESM05..HHZ'],
-      ['BR.ESM07..HHE','BR.ESM07..HHN','BR.ESM07..HHZ']]
 
-
-stzs=[["BR.ESM01..HH1", "BR.ESM01..HH2", "BR.ESM01..HHZ"],
+stzs_mid=[["BR.ESM01..HH1", "BR.ESM01..HH2", "BR.ESM01..HHZ"],
       ["BR.ESM08..HH1", "BR.ESM08..HH2", "BR.ESM08..HHZ"],
       ["BR.ESM10..HH1", "BR.ESM10..HH2", "BR.ESM10..HHZ"],
       ["SC.MAC04.01.HNE", "SC.MAC04.01.HNN", "SC.MAC04.01.HNZ"],
@@ -248,72 +272,102 @@ stzs=[["BR.ESM01..HH1", "BR.ESM01..HH2", "BR.ESM01..HHZ"],
       ["SC.MAC12.01.HNE", "SC.MAC12.01.HNN", "SC.MAC12.01.HNZ"],
       ["SC.MAC13.01.HNE", "SC.MAC13.01.HNN", "SC.MAC13.01.HNZ"],
       ["SC.MAC15.01.HNE", "SC.MAC15.01.HNN", "SC.MAC15.01.HNZ"]]
+
+stzs_sup= [["BR.ESM02..HHE", "BR.ESM02..HHN", "BR.ESM02..HHZ"],
+       ["BR.ESM03..HHE", "BR.ESM03..HHN", "BR.ESM03..HHZ"],
+       ["BR.ESM05..HHE", "BR.ESM05..HHN", "BR.ESM05..HHZ"],
+       ["BR.ESM07..HHE", "BR.ESM07..HHN", "BR.ESM07..HHZ"],
+       ["SC.MAC01.00.HNE", "SC.MAC01.00.HNN", "SC.MAC01.00.HNZ"],
+       ["SC.MAC02.00.HNE", "SC.MAC02.00.HNN", "SC.MAC02.00.HNZ"],
+       ["SC.MAC03.00.HNE", "SC.MAC03.00.HNN", "SC.MAC03.00.HNZ"],
+       ["SC.MAC05.00.HNE", "SC.MAC05.00.HNN", "SC.MAC05.00.HNZ"],
+       ["SC.MAC06.00.HNE", "SC.MAC06.00.HNN", "SC.MAC06.00.HNZ"],
+       ["SC.MAC07.00.HNE", "SC.MAC07.00.HNN", "SC.MAC07.00.HNZ"],
+       ["SC.MAC08.00.HNE", "SC.MAC08.00.HNN", "SC.MAC08.00.HNZ"],
+       ["SC.MAC09.00.HNE", "SC.MAC09.00.HNN", "SC.MAC09.00.HNZ"],
+       ["SC.MAC10.00.HNE", "SC.MAC10.00.HNN", "SC.MAC10.00.HNZ"],
+       ["SC.MAC16.00.HNE", "SC.MAC16.00.HNN", "SC.MAC16.00.HNZ"],
+       ["LK.BRK0..EHE", "LK.BRK0..EHN", "LK.BRK0..EHZ"],
+       ["LK.BRK1..EHE", "LK.BRK1..EHN", "LK.BRK1..EHZ"],
+       ["LK.BRK2..EHE", "LK.BRK2..EHN", "LK.BRK2..EHZ"],
+       ["LK.BRK3..EHE", "LK.BRK3..EHN", "LK.BRK3..EHZ"],
+       ["LK.BRK4..EHE", "LK.BRK4..EHN", "LK.BRK4..EHZ"]]
+
 stz_ph_s=Stream()
 
 
-config={'name':"test1d",
-        'wnd':15,
-        'shift':5,
-        'fmin':1,
-        'fmax':10,
-        'sigma':30,
-        'corr_thr':0.9,
-        'ampl_thr':1e-6,
-        'maxfev':150,
-        'ftol':5e-6,
-        'tr_solver':'lsmr',
-        'loss':'soft_l1',
-        'method':'trf'
-        }
-note=config['name']
+#config_json=json.dumps(config)
+#with open("config.json", "w") as f:
+#    json.dump(config, f, indent=4)
+try:
+    conf_file_name=sys.argv[1]
+except:
+    conf_file_name='config.json'
+
+ts=UTCDateTime(sys.argv[2])
+te=UTCDateTime(sys.argv[3])
+
+with open(conf_file_name, "r") as f:
+    config=json.load(f)
 config_json=json.dumps(config)
-with open("config.json", "w") as f:
-    json.dump(config, f, indent=4)
+note=config['name']
 
+with connectDB().connect() as con:
+    sql = "delete from "+schema+"."+tb+" where note='"+note+"'"
+    con.execute(sql)
+con.close()
 
-for stz in stzs:
-    phg=gauss(stz,UTCDateTime('2023-12-10T00:00'),sigma=config['sigma'],fmin=config['fmin'],fmax=config['fmax'],wnd=3600*24)
-    stz_ph_s.append(phg)
-for stz_ph_sx in stz_ph_s.slide(window_length=config['wnd'],step=config['shift']):
-    x,s=trARatio(stz_ph_sx,corr_thr=config['corr_thr'],ampl_thr=config['ampl_thr'])
-    ids=[cx['id'] for cx in x]
-    ratios=[cx['ratio'] for cx in x]
-    if len(ratios)>4:
-        print(ratios)
-        def afrl(sensor_n,lat,lon,depth):
-            return afr(sensor_n,lat,lon,depth,ids)
-        try:
-            a = curve_fit(afrl,np.arange(0,len(ids),dtype=float) , ratios, bounds=([-9.65, -35.76, -1500], [-9.62, -35.73, 0]),
-                          method=config['method'],tr_solver=config['tr_solver'], full_output=True,
-                          maxfev=config['maxfev'], ftol=config['ftol'], loss=config['loss'])
-            ds = [dist_xyz(kii, a[0][0], a[0][1], a[0][2]) for kii in list(s.keys())]
-            ampls = [s[kii] for kii in list(s.keys())]
-            source_ampl = np.mean(np.asarray(ampls) * np.asarray(ds))
-            perr = np.sqrt(np.diag(a[1]))
+t=ts
+if config['stz_depth']=='sup':
+    stzs=stzs_sup
+if config['stz_depth']=='mid':
+    stzs=stzs_mid
 
-            pdb = {'utc_time': x[0]['times'],
-                   'geometry': Point(a[0][1], a[0][0]),
-                   'depth': a[0][2],
-                   'lat': a[0][0],
-                   'lon': a[0][1],
-                   'note': note,
-                   'config':config_json,
-                   'err_lat': perr[0],
-                   'err_lon': perr[1],
-                   'err_depth': perr[2],
-                   'n_st': len(ampls),
-                   'sts': '['+','.join(s.keys())+']',
-                   'ampl':'['+','.join([str(s[k]) for k in s.keys()])+']',
-                   'misfit': 0,
-                   'source_ampl': source_ampl,
-                   'b': 0}
-            print(pdb)
-            gdf = geopandas.GeoDataFrame([pdb], crs="EPSG:4326")
-            #gdf["geometry"] = gdf["geometry"].apply(lambda geom: geom.wkt)
-            gdf.to_postgis('detections',connectDB(), 'sara4_test', 'append')
-        except Exception as e:
-            print(e)
+while t<te:
+    for stz in stzs:
+        phg=gauss(stz,t,sigma=config['sigma'],fmin=config['fmin'],fmax=config['fmax'],wnd=3600)
+        if len(phg)>0:
+            stz_ph_s.append(phg)
+    for stz_ph_sx in stz_ph_s.slide(window_length=config['wnd'],step=config['shift']):
+        x,s=trARatio(stz_ph_sx,corr_thr=config['corr_thr'],ampl_thr=config['ampl_thr'])
+        ids=[cx['id'] for cx in x]
+        ratios=[cx['ratio'] for cx in x]
+        if len(ratios)>config['min_s']:
+            print(ratios)
+            def afrl(sensor_n,lat,lon,depth):
+                return afr(sensor_n,lat,lon,depth,ids)
+            try:
+                a = curve_fit(afrl,np.arange(0,len(ids),dtype=float) , ratios, bounds=([-9.65, -35.76, -1500], [-9.62, -35.73, 0]),
+                              method=config['method'],tr_solver=config['tr_solver'], full_output=True,
+                              maxfev=config['maxfev'], ftol=config['ftol'], loss=config['loss'])
+                ds = [dist_xyz(kii, a[0][0], a[0][1], a[0][2]) for kii in list(s.keys())]
+                ampls = [s[kii] for kii in list(s.keys())]
+                source_ampl = np.mean(np.asarray(ampls) * np.asarray(ds))
+                perr = np.sqrt(np.diag(a[1]))
 
-print(p)
+                pdb = {'utc_time': x[0]['times'],
+                       'geometry': Point(a[0][1], a[0][0]),
+                       'depth': a[0][2],
+                       'lat': a[0][0],
+                       'lon': a[0][1],
+                       'note': note,
+                       'config':config_json,
+                       'err_lat': perr[0],
+                       'err_lon': perr[1],
+                       'err_depth': perr[2],
+                       'n_st': len(ampls),
+                       'sts': '['+','.join(s.keys())+']',
+                       'ampl':'['+','.join([str(s[k]) for k in s.keys()])+']',
+                       'misfit': 0,
+                       'source_ampl': source_ampl,
+                       'b': 0}
+                print(pdb)
+                gdf = geopandas.GeoDataFrame([pdb], crs="EPSG:4326")
+                #gdf["geometry"] = gdf["geometry"].apply(lambda geom: geom.wkt)
+                gdf.to_postgis('detections',connectDB(), 'sara4_test', 'append')
+            except Exception as e:
+                print(e)
+    t+=3600
+
 
 
