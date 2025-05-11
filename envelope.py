@@ -293,7 +293,7 @@ stzs_sup= [["BR.ESM02..HHE", "BR.ESM02..HHN", "BR.ESM02..HHZ"],
        ["LK.BRK3..EHE", "LK.BRK3..EHN", "LK.BRK3..EHZ"],
        ["LK.BRK4..EHE", "LK.BRK4..EHN", "LK.BRK4..EHZ"]]
 
-stz_ph_s=Stream()
+
 
 
 #config_json=json.dumps(config)
@@ -318,12 +318,15 @@ with connectDB().connect() as con:
 con.close()
 
 t=ts
+
 if config['stz_depth']=='sup':
     stzs=stzs_sup
 if config['stz_depth']=='mid':
     stzs=stzs_mid
 
 while t<te:
+    inventory = read_inventory('/mnt/seed/stations.xml')
+    stz_ph_s=Stream()
     for stz in stzs:
         phg=gauss(stz,t,sigma=config['sigma'],fmin=config['fmin'],fmax=config['fmax'],wnd=3600)
         if len(phg)>0:
