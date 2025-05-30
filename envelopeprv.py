@@ -23,6 +23,19 @@ import json
 
 import numpy as np
 
+
+
+#net={"st_ch": [["BR.ESM02..HHE", "BR.ESM02..HHN", "BR.ESM02..HHZ"], ["BR.ESM03..HHE", "BR.ESM03..HHN", "BR.ESM03..HHZ"], ["BR.ESM05..HHE", "BR.ESM05..HHN", "BR.ESM05..HHZ"], ["BR.ESM07..HHE", "BR.ESM07..HHN", "BR.ESM07..HHZ"], ["SC.MAC01.00.HNE", "SC.MAC01.00.HNN", "SC.MAC01.00.HNZ"], ["SC.MAC02.00.HNE", "SC.MAC02.00.HNN", "SC.MAC02.00.HNZ"], ["SC.MAC03.00.HNE", "SC.MAC03.00.HNN", "SC.MAC03.00.HNZ"], ["SC.MAC05.00.HNE", "SC.MAC05.00.HNN", "SC.MAC05.00.HNZ"], ["SC.MAC06.00.HNE", "SC.MAC06.00.HNN", "SC.MAC06.00.HNZ"], ["SC.MAC07.00.HNE", "SC.MAC07.00.HNN", "SC.MAC07.00.HNZ"], ["SC.MAC08.00.HNE", "SC.MAC08.00.HNN", "SC.MAC08.00.HNZ"], ["SC.MAC09.00.HNE", "SC.MAC09.00.HNN", "SC.MAC09.00.HNZ"], ["SC.MAC10.00.HNE", "SC.MAC10.00.HNN", "SC.MAC10.00.HNZ"], ["SC.MAC16.00.HNE", "SC.MAC16.00.HNN", "SC.MAC16.00.HNZ"], ["LK.BRK0..EHE", "LK.BRK0..EHN", "LK.BRK0..EHZ"], ["LK.BRK1..EHE", "LK.BRK1..EHN", "LK.BRK1..EHZ"], ["LK.BRK2..EHE", "LK.BRK2..EHN", "LK.BRK2..EHZ"], ["LK.BRK3..EHE", "LK.BRK3..EHN", "LK.BRK3..EHZ"], ["LK.BRK4..EHE", "LK.BRK4..EHN", "LK.BRK4..EHZ"],["BR.ESM01..HH1", "BR.ESM01..HH2", "BR.ESM01..HHZ"], ["BR.ESM08..HH1", "BR.ESM08..HH2", "BR.ESM08..HHZ"], ["BR.ESM10..HH1", "BR.ESM10..HH2", "BR.ESM10..HHZ"], ["SC.MAC04.01.HNE", "SC.MAC04.01.HNN", "SC.MAC04.01.HNZ"], ["SC.MAC11.01.HNE", "SC.MAC11.01.HNN", "SC.MAC11.01.HNZ"], ["SC.MAC12.01.HNE", "SC.MAC12.01.HNN", "SC.MAC12.01.HNZ"], ["SC.MAC13.01.HNE", "SC.MAC13.01.HNN", "SC.MAC13.01.HNZ"],  ["SC.MAC15.01.HNE", "SC.MAC15.01.HNN", "SC.MAC15.01.HNZ"],["BR.ESM04..GP1", "BR.ESM04..GP2", "BR.ESM04..GPZ"],["BR.ESM06..GP1", "BR.ESM06..GP2", "BR.ESM06..GPZ"],["BR.ESM09..GP1", "BR.ESM09..GP2", "BR.ESM09..GPZ"]], "st": ["BR.ESM02", "BR.ESM03", "BR.ESM05", "BR.ESM07", "SC.MAC01", "SC.MAC02", "SC.MAC03", "SC.MAC05", "SC.MAC06", "SC.MAC07", "SC.MAC08", "SC.MAC09", "SC.MAC10", "SC.MAC16", "LK.BRK0", "LK.BRK1", "LK.BRK2", "LK.BRK3", "LK.BRK4","BR.ESM01", "BR.ESM08", "BR.ESM10", "SC.MAC04", "SC.MAC11", "SC.MAC12", "SC.MAC13",  "SC.MAC15","BR.ESM04","BR.ESM06","BR.ESM09"]}
+s3 = boto3.client('s3')
+
+inventory = read_inventory('/mnt/seed/stations.xml')
+base_path = os.environ.get('SEED_PATH', '/mnt/seed/')
+bucket = os.environ.get('S3_BUCKET','geoapp-seed-data')
+
+cl = Client(base_path)
+tb='detections'
+schema='sara4_test'
+
 def connectDB():
     db_connection_url = "postgresql://postgres:wave*worm@88.99.137.51:5432/maceio_tests"
     engine = create_engine(db_connection_url)
@@ -328,7 +341,9 @@ stzs_sup= [["BR.ESM02..HHE", "BR.ESM02..HHN", "BR.ESM02..HHZ"],
 
 
 
-
+#config_json=json.dumps(config)
+#with open("config.json", "w") as f:
+#    json.dump(config, f, indent=4)
 try:
     conf_file_name=sys.argv[1]
 except:
@@ -341,17 +356,6 @@ with open(conf_file_name, "r") as f:
     config=json.load(f)
 config_json=json.dumps(config)
 note=config['name']
-
-s3 = boto3.client('s3')
-
-inventory = read_inventory('/mnt/seed/stations.xml')
-base_path = os.environ.get('SEED_PATH', '/mnt/seed/')
-bucket = os.environ.get('S3_BUCKET',config['s3_bucket'])
-
-cl = Client(base_path)
-tb='detections'
-schema='sara4_test'
-
 
 with connectDB().connect() as con:
     sql = "delete from "+schema+"."+tb+" where note='"+note+"'" \
@@ -371,54 +375,49 @@ t0=UTCDateTime.now()
 while t<te:
     inventory = read_inventory('/mnt/seed/stations.xml')
     stz_ph_s=Stream()
-    try:
-        print("elaborating: " + t.isoformat())
-        for stz in stzs:
-            phg=gauss(stz,t,sigma=config['sigma'],fmin=config['fmin'],fmax=config['fmax'],wnd=3600)
-            if len(phg)>0:
-                stz_ph_s.append(phg)
-        for stz_ph_sx in stz_ph_s.slide(window_length=config['wnd'],step=config['shift']):
-            x,s=trARatio(stz_ph_sx,corr_thr=config['corr_thr'],ampl_thr=config['ampl_thr'])
-            ids=[cx['id'] for cx in x]
-            ratios=[cx['ratio'] for cx in x]
-            if len(ratios)>config['min_s']:
-                print(ratios)
-                def afrl(sensor_n,lat,lon,depth):
-                    return afr(sensor_n,lat,lon,depth,ids)
-                try:
-                    a = curve_fit(afrl,np.arange(0,len(ids),dtype=float) , ratios, bounds=([-9.65, -35.76, -1500], [-9.62, -35.73, 0]),
-                                  method=config['method'],tr_solver=config['tr_solver'], full_output=True,
-                                  maxfev=config['maxfev'], ftol=config['ftol'], loss=config['loss'])
-                    ds = [dist_xyz(kii, a[0][0], a[0][1], a[0][2]) for kii in list(s.keys())]
-                    ampls = [s[kii] for kii in list(s.keys())]
-                    source_ampl = np.mean(np.asarray(ampls) * np.asarray(ds))
-                    perr = np.sqrt(np.diag(a[1]))
+    for stz in stzs:
+        phg=gauss(stz,t,sigma=config['sigma'],fmin=config['fmin'],fmax=config['fmax'],wnd=3600)
+        if len(phg)>0:
+            stz_ph_s.append(phg)
+    for stz_ph_sx in stz_ph_s.slide(window_length=config['wnd'],step=config['shift']):
+        x,s=trARatio_mp(stz_ph_sx,corr_thr=config['corr_thr'],ampl_thr=config['ampl_thr'])
+        ids=[cx['id'] for cx in x]
+        ratios=[cx['ratio'] for cx in x]
+        if len(ratios)>config['min_s']:
+            print(ratios)
+            def afrl(sensor_n,lat,lon,depth):
+                return afr(sensor_n,lat,lon,depth,ids)
+            try:
+                a = curve_fit(afrl,np.arange(0,len(ids),dtype=float) , ratios, bounds=([-9.65, -35.76, -1500], [-9.62, -35.73, 0]),
+                              method=config['method'],tr_solver=config['tr_solver'], full_output=True,
+                              maxfev=config['maxfev'], ftol=config['ftol'], loss=config['loss'])
+                ds = [dist_xyz(kii, a[0][0], a[0][1], a[0][2]) for kii in list(s.keys())]
+                ampls = [s[kii] for kii in list(s.keys())]
+                source_ampl = np.mean(np.asarray(ampls) * np.asarray(ds))
+                perr = np.sqrt(np.diag(a[1]))
 
-                    pdb = {'utc_time': x[0]['times'],
-                           'geometry': Point(a[0][1], a[0][0]),
-                           'depth': a[0][2],
-                           'lat': a[0][0],
-                           'lon': a[0][1],
-                           'note': note,
-                           'config':config_json,
-                           'err_lat': perr[0],
-                           'err_lon': perr[1],
-                           'err_depth': perr[2],
-                           'n_st': len(ampls),
-                           'sts': '['+','.join(s.keys())+']',
-                           'ampl':'['+','.join([str(s[k]) for k in s.keys()])+']',
-                           'misfit': 0,
-                           'source_ampl': source_ampl,
-                           'b': 0}
-                    print(pdb)
-                    gdf = geopandas.GeoDataFrame([pdb], crs="EPSG:4326")
-                    #gdf["geometry"] = gdf["geometry"].apply(lambda geom: geom.wkt)
-                    gdf.to_postgis('detections',connectDB(), 'sara4_test', 'append')
-                except Exception as e:
-                    print(e)
-    except Exception as e:
-        print("elaboration at "+t.isoformat()+" failed ")
-        print(e)
+                pdb = {'utc_time': x[0]['times'],
+                       'geometry': Point(a[0][1], a[0][0]),
+                       'depth': a[0][2],
+                       'lat': a[0][0],
+                       'lon': a[0][1],
+                       'note': note,
+                       'config':config_json,
+                       'err_lat': perr[0],
+                       'err_lon': perr[1],
+                       'err_depth': perr[2],
+                       'n_st': len(ampls),
+                       'sts': '['+','.join(s.keys())+']',
+                       'ampl':'['+','.join([str(s[k]) for k in s.keys()])+']',
+                       'misfit': 0,
+                       'source_ampl': source_ampl,
+                       'b': 0}
+                print(pdb)
+                gdf = geopandas.GeoDataFrame([pdb], crs="EPSG:4326")
+                #gdf["geometry"] = gdf["geometry"].apply(lambda geom: geom.wkt)
+                gdf.to_postgis('detections',connectDB(), 'sara4_test', 'append')
+            except Exception as e:
+                print(e)
     t+=3600
 print("started "+t0.isoformat())
 print("stopped "+UTCDateTime.now().isoformat())
