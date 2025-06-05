@@ -57,7 +57,7 @@ def sara_density(ts, te, X, Y, stpx, stpy,dmin,dmax, den_min, den_max, lines, ty
     dfo = getSaraRaw(ts, te,type,dmin,dmax)
     nEv = len(dfo)
     maxMag = dfo['source_ampl'].max()
-    #athena_ids = ','.join(dfo['athena_id'].tolist())
+
 
     te_ = []
     nEv_ = []
