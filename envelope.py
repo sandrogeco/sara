@@ -17,16 +17,13 @@ from obspy import read_inventory,Trace,Stream
 from obspy.geodetics import  gps2dist_azimuth
 from obspy.core.inventory import Channel
 import geopandas
-from sqlalchemy import create_engine
+
 from shapely import Point
 import json
-
+import utils
 import numpy as np
 
-def connectDB():
-    db_connection_url = "postgresql://postgres:wave*worm@88.99.137.51:5432/maceio_tests"
-    engine = create_engine(db_connection_url)
-    return engine
+
 
 def toPath(nslc, t):
     # nslc = ['BR','ESM10','','HHZ']
@@ -344,7 +341,7 @@ note=config['name']
 
 s3 = boto3.client('s3')
 
-inventory = read_inventory('/mnt/seed/stations.xml')
+inventory = read_inventory(config['inventory_path'])
 base_path = os.environ.get('SEED_PATH', '/mnt/seed/')
 bucket = os.environ.get('S3_BUCKET',config['s3_bucket'])
 
@@ -353,7 +350,7 @@ tb='detections'
 schema='sara4_test'
 
 
-with connectDB().connect() as con:
+with utils.connectDB().connect() as con:
     sql = "delete from "+schema+"."+tb+" where note='"+note+"'" \
             "and utc_time>'"+ts.isoformat()+"' " \
             " and utc_time<'"+te.isoformat()+"'"
@@ -413,7 +410,7 @@ while t<te:
                     print(pdb)
                     gdf = geopandas.GeoDataFrame([pdb], crs="EPSG:4326")
                     #gdf["geometry"] = gdf["geometry"].apply(lambda geom: geom.wkt)
-                    gdf.to_postgis('detections',connectDB(), 'sara4_test', 'append')
+                    gdf.to_postgis('detections',utils.connectDB(), 'sara4_test', 'append')
                 except Exception as e:
                     print(e)
     except Exception as e:

@@ -1,0 +1,17 @@
+{
+    "name": "MidAgoDec23",
+    "stz_depth": "mid",
+    "wnd": 15,
+    "shift": 1,
+    "fmin": 1,
+    "fmax": 10,
+    "sigma": 30,
+    "corr_thr": 0.75,
+    "ampl_thr": 1e-06,
+    "min_s": 4,
+    "maxfev": 100,
+    "ftol": 5e-06,
+    "tr_solver": "lsmr",
+    "loss": "soft_l1",
+    "method": "trf"
+}
