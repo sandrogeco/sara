@@ -1,0 +1,9 @@
+{
+    "den_wnd": 15,
+    "den_shift": 1,
+    "den_in_type": "SupAgoDec23",
+    "den_out_type": "SupAgoDec23_test1",
+    "den_min_source_ampl": 0.01,
+    "den_min_depth": 100,
+    "den_max_depth": 1500
+}
